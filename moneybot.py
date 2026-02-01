@@ -8,18 +8,16 @@ from keep_alive import keep_alive
 
 # ======================= CONFIGURATION ZONE ======================= #
 
-# 1. TELEGRAM API
+# 1. TELEGRAM API (Your Data)
 API_ID = 30367926
 API_HASH = '3f846e3ad96fcc9dc7c4121cc94a1542'
 
-# 2. USER LOGIN (The Spy)
-# Your existing session string
+# 2. USER LOGIN (The Spy - Your String Session)
 STRING_SESSION = '1BVtsOHsBu2FA_Nk6gcqPweoks9SGyCJfLU5Qg3ByNplVWoKzigtRwR2HRXZZB0GaWR1gMFW2P30sHebC45RLiPmubr4dtBboBFCpFfIq_FnoEX1e5pOvc9mcyBgLkLFa2EgCOYJDDcKm3mZwEm7a-2-ek4T2SnGZb62svAlcBfiM_Wir9xa7hNwDU0Utm3xX4Z2vU8Gzf39hX0VpeWYf0ukcqwjaeWnleOYqDJARouTtRJ2bTJQc5_q9esTluCfI0R4vgPrOpNY5elfCXD6kf3H496KUvDthfeJ7FN74APuX--evGUM9xRC9Olw2G4fOtB0apQrOSgtdjQjgtMx2w79tvzRwRzY=' 
 
 # 3. BOT SETTINGS (The Delivery Boy)
-# PASTE YOUR NEW BOT TOKEN HERE!
 BOT_TOKEN = '8539809736:AAF88cdpzmOnC2GGBPgFAB9WAI-cbMSEz7Y' 
-BOT_USERNAME = 'Deals_Loader_Bot' # e.g., 'Deals_Loader_Bot' (No @ symbol)
+BOT_USERNAME = 'Deals_Loader_Bot' 
 
 # 4. CHANNELS
 SOURCE_CHANNELS = [
@@ -61,16 +59,37 @@ def get_money_link(destination_link):
         print(f"⚠️ Link Error: {e}")
         return destination_link
 
-def clean_description(text):
-    """Removes junk lines from description."""
+def clean_text_laser(text):
+    """
+    AGGRESSIVE CLEANER: Removes ANY line with links or 'Join'/'Click'.
+    This deletes the old 'shortxlinks' from the source.
+    """
     if not text: return ""
     lines = text.split('\n')
-    cleaned = []
-    forbidden = ['join', 'download', 'click', 'http', 't.me', 'bit.ly', 'share', '@']
+    cleaned_lines = []
+    
+    # 1. Regex to catch hidden URLs (http, www, .com, .in)
+    url_pattern = re.compile(r'(http|ftp|https):\/\/([\w_-]+(?:(?:\.[\w_-]+)+))([\w.,@?^=%&:\/~+#-]*[\w@?^=%&\/~+#-])')
+    
+    # 2. Words that mean "Trash Line"
+    bad_words = ['join', 'click', 'download', 'link', 'share', 'subscribe', 'shortxlinks', 'bit.ly', 't.me', '@']
+
     for line in lines:
-        if not any(bad in line.lower() for bad in forbidden):
-            cleaned.append(line)
-    return "\n".join(cleaned)
+        lower_line = line.lower()
+        
+        # Rule A: If it has a URL, kill it.
+        if url_pattern.search(line):
+            continue
+            
+        # Rule B: If it has bad words, kill it.
+        if any(bad in lower_line for bad in bad_words):
+            continue
+            
+        # If it survived, keep it.
+        if line.strip(): # Skip empty lines
+            cleaned_lines.append(line)
+            
+    return "\n".join(cleaned_lines)
 
 # --- PART A: THE SPY (User Client) ---
 @user_client.on(events.NewMessage(chats=SOURCE_CHANNELS))
@@ -83,10 +102,11 @@ async def user_handler(event):
     f_size = event.message.file.size
     sig = f"{f_name}_{f_size}"
     if sig in recent_files:
+        print(f"❌ Duplicate Skipped: {f_name}")
         return
     recent_files.append(sig)
 
-    print(f"📥 New File Detected: {f_name}")
+    print(f"📥 Processing New File: {f_name}")
 
     try:
         # 1. Upload to Storage (Private)
@@ -96,25 +116,35 @@ async def user_handler(event):
             caption=event.message.text
         )
 
-        # 2. Create Link to OUR BOT (Not the channel)
-        # Link format: https://t.me/MyBot?start=12345
+        # 2. Create Link to OUR BOT
         bot_start_link = f"https://t.me/{BOT_USERNAME}?start={stored_msg.id}"
         money_link = get_money_link(bot_start_link)
 
-        # 3. Clean Text & Post
+        # 3. Clean Text (The Fix)
+        # We start with the original text, then burn the bad lines.
+        original_text = event.message.text or ""
+        clean_desc = clean_text_laser(original_text)
+        
+        # 4. Build New Caption
         clean_name = (event.message.file.name or "App.apk").replace(".apk", "").replace("_", " ")
         size_mb = f"{event.message.file.size / (1024 * 1024):.1f} MB"
-        desc = clean_description(event.message.text)
         
         caption = (
             f"🌀 **{clean_name}**\n"
             f"📦 **Size:** {size_mb}\n\n"
-            f"💠 **Mod Info:**\n{desc[:800]}\n\n"
+            f"💠 **Mod Info:**\n{clean_desc[:800]}\n\n"
             f"⭕️ ➡️ [Click here to Download]({money_link})\n\n"
             f"☑️ **Direct Mod Apk File** ➡️ [Join Link](https://t.me/get_premium_mod)"
         )
 
-        await user_client.send_message(MAIN_CHANNEL, caption, link_preview=False)
+        # 5. Post to Main Channel
+        # We send the FILE again with the NEW caption.
+        # This replaces the old caption entirely.
+        await user_client.send_file(
+            MAIN_CHANNEL,
+            event.message.media,
+            caption=caption
+        )
         print("✅ Posted to Main Channel")
 
     except Exception as e:
@@ -123,35 +153,28 @@ async def user_handler(event):
 # --- PART B: THE DELIVERY BOY (Bot Client) ---
 @bot_client.on(events.NewMessage(pattern='/start'))
 async def bot_handler(event):
-    # User sends: /start 12345
-    # We extract "12345" to know which file they want
     try:
         args = event.message.text.split()
         if len(args) < 2:
-            await event.reply("👋 Welcome! Please use the links from our channel to get files.")
+            await event.reply("👋 Welcome! Please use the links from our channel.")
             return
 
         message_id = int(args[1])
-        print(f"📤 Delivery Request for File ID: {message_id}")
+        print(f"📤 Bot delivering file ID: {message_id}")
 
-        # Fetch file from Storage Channel and send to User
-        # NOTE: Bot must be Admin in Storage Channel to do this!
         post = await bot_client.get_messages(STORAGE_CHANNEL_ID, ids=message_id)
-        
         if post and post.file:
             await event.reply(file=post.media, caption="✅ **Here is your file!**\n🚀 @get_premium_mod")
         else:
-            await event.reply("❌ File not found. It might have been deleted.")
+            await event.reply("❌ File not found.")
 
     except Exception as e:
-        print(f"⚠️ Bot Delivery Error: {e}")
-        await event.reply("❌ An error occurred.")
+        print(f"⚠️ Bot Error: {e}")
 
 # --- RUNNER ---
 print("🚀 Double-Agent Bot is Running...")
 keep_alive()
 
-# Start both clients
 loop = asyncio.get_event_loop()
 loop.create_task(bot_client.start(bot_token=BOT_TOKEN))
 loop.create_task(user_client.start())
