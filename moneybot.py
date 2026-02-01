@@ -1,6 +1,7 @@
 import asyncio
 import requests
 import os
+import re
 from collections import deque
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -76,6 +77,25 @@ def is_duplicate(message):
     recent_files.append(signature)
     return False
 
+# --- THE CLEANING FUNCTION (The Fix) ---
+def clean_description(text):
+    """Removes lines with links, 'Join', or 'Download'."""
+    if not text:
+        return ""
+    
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    # Words that indicate a line is "Junk"
+    forbidden_words = ['join', 'download', 'click', 'http', 't.me', 'bit.ly', 'share', 'subscribe', 'channel']
+    
+    for line in lines:
+        # Check if the line contains any bad words (case insensitive)
+        if not any(bad in line.lower() for bad in forbidden_words):
+            cleaned_lines.append(line)
+            
+    return "\n".join(cleaned_lines)
+
 @client.on(events.NewMessage(chats=SOURCE_CHANNELS))
 async def handler(event):
     if not event.message.file:
@@ -112,13 +132,17 @@ async def handler(event):
         file_size_mb = event.message.file.size / (1024 * 1024)
         size_str = f"{file_size_mb:.1f} MB"
         
-        # C. Feature List (Extract or Default)
+        # C. Feature List (WITH SMART CLEANING)
         original_desc = event.message.text or ""
-        if len(original_desc) > 20:
-             # Keep original text if it looks like a real description
-            features = f"💠 **Mod Info:**\n{original_desc[:500]}..." 
+        
+        # Use our new cleaner function
+        cleaned_desc = clean_description(original_desc)
+        
+        if len(cleaned_desc) > 20:
+             # Take the cleaned text, but limit length to avoid huge walls of text
+            features = f"💠 **Mod Info:**\n{cleaned_desc[:800]}" 
         else:
-            # Default text if source is empty
+            # Default text if source is empty or everything was filtered out
             features = (
                 "💠 **Features Packed:**\n"
                 "🔸 Premium Unlocked\n"
@@ -127,7 +151,7 @@ async def handler(event):
                 "🔸 100% Safe & Secure"
             )
 
-        # D. Build Caption with "Click Here" Button
+        # D. Build Caption
         caption_text = (
             f"🌀 **{clean_name}**\n"
             f"🔰 **Version:** Latest\n"
@@ -139,11 +163,13 @@ async def handler(event):
         )
 
         # 3. POST TO MAIN CHANNEL
+        # We set file=None so it sends TEXT ONLY (with the link). 
+        # This prevents sending the APK twice.
         await client.send_message(
             MAIN_CHANNEL,
             caption_text,
-            link_preview=False, # Keeps the message clean
-            file=event.message.media if hasattr(event.message, 'photo') else None
+            link_preview=False,
+            file=None 
         )
         print(f"✅ Posted Successfully to {MAIN_CHANNEL}")
 
